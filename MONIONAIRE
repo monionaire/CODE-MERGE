@@ -839,6 +839,7 @@ class SmartAggregator:
             "LINE HISTORY"
         ]
         
+        self.sportsbook_columns = {}
         self.all_headers = []
         
         # Text colors
@@ -976,34 +977,34 @@ class SmartAggregator:
                 sportsbooks = self.get_all_sportsbooks()
                 self.sportsbook_color_map = self.assign_sportsbook_colors(sportsbooks)
                 
-                # Check if headers are correct
+                # Check if headers exist and rebuild sportsbook columns
                 existing_headers = self.sheet.row_values(1)
                 
-                if not existing_headers or existing_headers != self.base_headers:
-                    print("Updating headers to LONG FORMAT...")
-                    self.sheet.clear()
-                    self.sheet.update([self.base_headers], "A1")
-                    self.all_headers = self.base_headers
-                    print("[SUCCESS] Updated headers to LONG FORMAT")
-                else:
+                if existing_headers:
                     self.all_headers = existing_headers
+                    self.rebuild_sportsbook_columns()
+                else:
+                    # Build new wide format headers
+                    self.all_headers = self.build_headers(sportsbooks)
+                    self.sheet.update([self.all_headers], "A1")
+                    print(f"[SUCCESS] Updated headers with {len(sportsbooks)} sportsbooks")
                     
                 return True
                 
             except gspread.exceptions.WorksheetNotFound:
-                print("Creating new LINE MOVEMENT sheet with LONG FORMAT...")
+                print("Creating new LINE MOVEMENT sheet...")
                 # Get sportsbooks for color assignment
                 sportsbooks = self.get_all_sportsbooks()
                 self.sportsbook_color_map = self.assign_sportsbook_colors(sportsbooks)
                 
-                self.all_headers = self.base_headers
+                self.all_headers = self.build_headers(sportsbooks)
                 self.sheet = self.spreadsheet.add_worksheet(
                     title="LINE MOVEMENT", 
                     rows=5000, 
                     cols=max(20, len(self.all_headers))
                 )
                 self.sheet.update([self.all_headers], "A1")
-                print(f"[SUCCESS] Created new sheet with LONG FORMAT")
+                print(f"[SUCCESS] Created new sheet with {len(sportsbooks)} sportsbooks")
                 return True
                 
         except Exception as e:
@@ -1048,26 +1049,61 @@ class SmartAggregator:
         except Exception as e:
             print(f"  ⚠ Warning: Could not clear formatting: {str(e)[:100]}")
     
+    def build_headers(self, sportsbooks: List[str]) -> List[str]:
+        """Build headers with sportsbook columns."""
+        headers = ["PROP ID", "PLAYER NAME", "MARKET", "SPORT", "EVENT", "GAME TIME"]
+        self.sportsbook_columns = {}
+        
+        for sportsbook in sportsbooks:
+            start_idx = len(headers)
+            headers.extend([
+                f"CURRENT LINE ({sportsbook})",
+                f"PRICE ({sportsbook})",
+                f"% CHANGE ({sportsbook})",
+                f"LINE HISTORY ({sportsbook})"
+            ])
+            
+            self.sportsbook_columns[sportsbook] = {
+                'current_line': start_idx,
+                'price': start_idx + 1,
+                'percentage': start_idx + 2,
+                'history': start_idx + 3
+            }
+        
+        return headers
+    
+    def rebuild_sportsbook_columns(self):
+        """Rebuild sportsbook columns from existing headers."""
+        self.sportsbook_columns = {}
+        
+        for idx, header in enumerate(self.all_headers):
+            if "(" in header and ")" in header:
+                parts = header.split("(")
+                if len(parts) == 2:
+                    col_type = parts[0].strip()
+                    sportsbook = parts[1].replace(")", "").strip()
+                    
+                    if sportsbook not in self.sportsbook_columns:
+                        self.sportsbook_columns[sportsbook] = {}
+                    
+                    if "CURRENT LINE" in col_type:
+                        self.sportsbook_columns[sportsbook]['current_line'] = idx
+                    elif "PRICE" in col_type and "%" not in col_type:
+                        self.sportsbook_columns[sportsbook]['price'] = idx
+                    elif "% CHANGE" in col_type:
+                        self.sportsbook_columns[sportsbook]['percentage'] = idx
+                    elif "LINE HISTORY" in col_type:
+                        self.sportsbook_columns[sportsbook]['history'] = idx
+    
     def process_prop_data(self) -> List[List[str]]:
-        """Process all prop data and create rows in LONG FORMAT (one row per sportsbook per prop)."""
+        """Process all prop data and create rows with calculations."""
         rows = []
-        
-        print(f"\nProcessing raw history with {len(self.raw_history)} prop IDs...")
-        
-        prop_counter = 0
+        prop_groups = defaultdict(lambda: defaultdict(list))
         
         for prop_id, entries in self.raw_history.items():
             if not entries:
                 continue
             
-            # Group by sportsbook for this prop
-            entries_by_book = defaultdict(list)
-            for entry in entries:
-                book = entry.get("book", "").strip()
-                if book:
-                    entries_by_book[book].append(entry)
-            
-            # Get base prop info from first entry
             first_entry = entries[0]
             player = first_entry.get("player", "").strip()
             market = first_entry.get("market", "").strip()
@@ -1075,63 +1111,90 @@ class SmartAggregator:
             sport = first_entry.get("sport", "").strip()
             game_time = first_entry.get("game_time", "")
             
-            formatted_time = self.format_game_time(game_time) if game_time else ""
+            key = (player, market, event, sport)
             
-            # Create one row per sportsbook for this prop
-            for sportsbook, book_entries in entries_by_book.items():
-                if not book_entries:
-                    continue
-                
-                # Sort entries by timestamp
-                sorted_entries = sorted(book_entries, key=lambda x: x.get("timestamp", ""))
-                
-                # Get latest entry
-                latest = sorted_entries[-1]
-                current_line = latest.get("line")
-                current_price = latest.get("price")
-                
-                # Get first entry for percentage change calculation
-                first = sorted_entries[0]
-                first_line = first.get("line")
-                
-                # Calculate percentage change
-                percentage = self.calculate_percentage_change(first_line, current_line)
-                
-                # Create line history string
-                history_parts = []
-                for entry in sorted_entries:
-                    line = entry.get("line")
-                    if line is not None:
-                        try:
-                            history_parts.append(f"{float(line):.1f}")
-                        except:
-                            pass
-                
-                history = "→".join(history_parts) if history_parts else ""
-                
-                # Create the row
-                row = [
-                    prop_id,
-                    player,
-                    market,
-                    sport,
-                    event,
-                    formatted_time,
-                    sportsbook,  # Sportsbook name in its own column
-                    str(current_line) if current_line is not None else "",
-                    str(current_price) if current_price is not None else "",
-                    self.format_percentage(percentage),
-                    history
-                ]
-                
-                rows.append(row)
-                prop_counter += 1
-            
-            if (prop_counter + 1) % 100 == 0:
-                print(f"[PROGRESS] Processed {prop_counter} rows...")
+            for entry in entries:
+                book = entry.get("book", "").strip()
+                if book:
+                    prop_groups[key][book].append(entry)
         
-        print(f"\n[INFO] Created {len(rows)} rows in LONG FORMAT")
+        print(f"\nProcessing {len(prop_groups)} unique props...")
+        
+        for idx, ((player, market, event, sport), book_data) in enumerate(prop_groups.items()):
+            first_book = next(iter(book_data.values()))
+            prop_id = first_book[0].get("prop_id", "") if first_book else ""
+            
+            row = self.create_row_for_prop(
+                prop_id=prop_id,
+                player=player,
+                market=market,
+                sport=sport,
+                event=event,
+                game_time=game_time,
+                book_data=book_data
+            )
+            
+            if row:
+                rows.append(row)
+            
+            if (idx + 1) % 50 == 0:
+                print(f"[PROGRESS] Processed {idx + 1}/{len(prop_groups)} props")
+        
         return rows
+    
+    def create_row_for_prop(self, prop_id: str, player: str, market: str, sport: str, 
+                           event: str, game_time: str, book_data: Dict[str, List[Dict]]) -> List[str]:
+        """Create a row for one prop with all sportsbooks."""
+        row = [''] * len(self.all_headers)
+        
+        row[0] = prop_id
+        row[1] = player
+        row[2] = market
+        row[3] = sport
+        row[4] = event
+        
+        if game_time:
+            row[5] = self.format_game_time(game_time)
+        
+        for sportsbook, entries in book_data.items():
+            if sportsbook not in self.sportsbook_columns:
+                continue
+            
+            cols = self.sportsbook_columns[sportsbook]
+            
+            if not entries:
+                continue
+            
+            sorted_entries = sorted(entries, key=lambda x: x.get("timestamp", ""))
+            latest = sorted_entries[-1]
+            current_line = latest.get("line")
+            current_price = latest.get("price")
+            
+            first = sorted_entries[0]
+            first_line = first.get("line")
+            percentage = self.calculate_percentage_change(first_line, current_line)
+            
+            history_parts = []
+            for entry in sorted_entries:
+                line = entry.get("line")
+                if line is not None:
+                    history_parts.append(f"{float(line):.1f}")
+            
+            history = "→".join(history_parts)
+            
+            if cols['current_line'] < len(row):
+                row[cols['current_line']] = str(current_line) if current_line is not None else ""
+            
+            if cols['price'] < len(row):
+                row[cols['price']] = str(current_price) if current_price is not None else ""
+            
+            if cols['percentage'] < len(row):
+                row[cols['percentage']] = self.format_percentage(percentage)
+            
+            if cols['history'] < len(row):
+                row[cols['history']] = history
+        
+        return row
     
     def apply_colors_efficiently(self, rows: List[List[str]]):
         """Apply colors efficiently using batch operations."""

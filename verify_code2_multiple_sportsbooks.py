@@ -45,10 +45,25 @@ def simulate_code2_logic(raw_history: Dict[str, List[Dict]]) -> List[List[str]]:
             if not book_entries:
                 continue
             
-            # Get latest entry
-            latest = book_entries[-1]
+            # Sort entries by timestamp (Code 2 line 1086)
+            sorted_entries = sorted(book_entries, key=lambda x: x.get("timestamp", ""))
+            
+            # Get latest entry (Code 2 line 1089-1091)
+            latest = sorted_entries[-1]
             current_line = latest.get("line")
             current_price = latest.get("price")
+            
+            # Create line history string (Code 2 line 1101-1110)
+            history_parts = []
+            for entry in sorted_entries:
+                line = entry.get("line")
+                if line is not None:
+                    try:
+                        history_parts.append(f"{float(line):.1f}")
+                    except:
+                        pass
+            
+            history = "→".join(history_parts) if history_parts else ""
             
             # Create the row (Code 2 line 1113-1125)
             row = [
@@ -62,7 +77,7 @@ def simulate_code2_logic(raw_history: Dict[str, List[Dict]]) -> List[List[str]]:
                 str(current_line) if current_line is not None else "",
                 str(current_price) if current_price is not None else "",
                 "0%",  # Simplified percentage
-                f"{current_line}"  # Simplified history
+                history  # Proper history with arrows
             ]
             
             rows.append(row)
@@ -87,9 +102,42 @@ def main():
                 "event": "Lakers vs Warriors",
                 "game_time": "2024-01-17 19:00",
                 "book": "DraftKings",
+                "line": 27.5,
+                "price": -110,
+                "timestamp": "2024-01-17 10:00:00"
+            },
+            {
+                "player": "LeBron James",
+                "market": "Points",
+                "sport": "NBA",
+                "event": "Lakers vs Warriors",
+                "game_time": "2024-01-17 19:00",
+                "book": "DraftKings",
+                "line": 28.0,
+                "price": -110,
+                "timestamp": "2024-01-17 11:00:00"
+            },
+            {
+                "player": "LeBron James",
+                "market": "Points",
+                "sport": "NBA",
+                "event": "Lakers vs Warriors",
+                "game_time": "2024-01-17 19:00",
+                "book": "DraftKings",
                 "line": 28.5,
                 "price": -110,
                 "timestamp": "2024-01-17 12:00:00"
+            },
+            {
+                "player": "LeBron James",
+                "market": "Points",
+                "sport": "NBA",
+                "event": "Lakers vs Warriors",
+                "game_time": "2024-01-17 19:00",
+                "book": "FanDuel",
+                "line": 27.5,
+                "price": -115,
+                "timestamp": "2024-01-17 10:00:00"
             },
             {
                 "player": "LeBron James",
@@ -142,8 +190,11 @@ def main():
     
     print("\nSample Data:")
     print(f"  Props: {len(sample_raw_history)}")
-    print(f"  PROP001 has {len(sample_raw_history['PROP001'])} sportsbook entries (DraftKings, FanDuel, BetMGM)")
-    print(f"  PROP002 has {len(sample_raw_history['PROP002'])} sportsbook entries (DraftKings, FanDuel)")
+    print(f"  PROP001: 3 sportsbooks with line history")
+    print(f"    - DraftKings: 3 entries (27.5 → 28.0 → 28.5)")
+    print(f"    - FanDuel: 2 entries (27.5 → 28.0)")
+    print(f"    - BetMGM: 1 entry (29.0)")
+    print(f"  PROP002: 2 sportsbooks (DraftKings, FanDuel)")
     print()
     
     # Run Code 2's logic
